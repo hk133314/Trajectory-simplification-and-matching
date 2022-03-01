@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="chrome=1">
+    <script type="text/javascript" src="http://ajax.aspnetcdn.com/ajax/jquery/jquery-3.5.1.min.js"></script>
+    <meta name="viewport" content="initial-scale=1.0, user-scalable=no, width=device-width">
+    <link rel="stylesheet" href="https://a.amap.com/jsapi_demos/static/demo-center/css/demo-center.css"/>
+    <style type="text/css">
+        html, body, #display_map1, #display_map2 {
+            height: 100%;
+        }
+
+        #display_map1, #display_map2 {
+            margin-left: 1%;
+            width: 49%;
+        }
+
+        #display_map1 {
+            float: left;
+        }
+
+        #display_map2 {
+            float: right;
+        }
+    </style>
+    <title>路径简化</title>
+</head>
+<body>
+<div id="display_map1"></div>
+<div id="display_map2"></div>
+<p id="traces_pts">
+    <%= traces_pts %>
+</p>
+<script language="javascript"
+        src="https://webapi.amap.com/maps?v=1.4.15&key=cbf99222f72ec2795e2178fedc47ec01"></script>
+<script type="text/javascript">
+    var map = new AMap.Map("display_map1", {
+        zoom: 14,
+        center: [108.947021, 34.259430],
+        resizeEnable: true
+
+    });
+    var map1 = new AMap.Map("display_map2", {
+        zoom: 14,
+        center: [108.947021, 34.259430],
+        resizeEnable: true
+    });
+
+    window.onload = function () {
+        $.ajax({
+            type: "get",
+            url: "http://localhost:3090/users/index2",
+            dataType: "text",
+            data: "",
+            success: function (result) {
+                // 轨迹点获取
+                var trace_pts_text = result.match(/<p id="traces_pts">([\s\S]*?)<\/p>/)[1].split(",,,");
+                // var traces_id_text = result.match(/<p id="traces_id">([\s\S]*?)<\/p>/)[1].split(",,,");
+                // console.log(trace_pts_text);
+                // console.log(traces_id_text);
+                var traces_pts = [];
+                var i;
+                var j;
+                for (i = 0; i < trace_pts_text.length; i++) {
+                    var sub_traces_info = [];
+                    var sub_text = trace_pts_text[i].split(",");
+                    for (j = 0; j < sub_text.length / 2; j++) {
+                        sub_traces_info.push([parseFloat(sub_text[j * 2]), parseFloat(sub_text[j * 2 + 1])]);
+                    }
+                    traces_pts.push(sub_traces_info);
+                }
+                console.log(traces_pts.length, traces_pts);
+
+                var all_feature_index = "";
+                var all_feature_pts = "";
+                var all_feature_pts1 = [];
+                var all_pts_distance = "";
+                var line_wkts = "";
+
+                // 执行dauglas_peucker算法，获取简化后点信息
+                // for (let i = 0; i < 1; i++) {
+                for (let i = 0; i < traces_pts.length; i++) {
+                    // 当前轨迹点序列
+                    var cur_trace_pts = traces_pts[i];
+
+                    // 显示简化前线段
+                    display_lines(cur_trace_pts, map, "#ff3333");
+
+                    // dauglas_peucker算法的距离阈值
+                    var threshold_dist = 30;
+                    // 递归调用dauglas_peucker算法，输出包含时空控制点的索引和对应点坐标
+                    var feature_index = [];
+                    var feature_x = [];
+                    var feature_y = [];
+                    dauglas_peucker(0, cur_trace_pts.length - 1, threshold_dist);
+
+                    // //验证
+                    // for (let j = 0; j < cur_trace_pts.length; j++) {
+                    //     if (feature_index.includes(j)) {
+                    //         console.log(j, cur_trace_pts[j]);
+                    //     }
+                    // }
+
+                    // dauglas_peucker简化后点集
+                    var feature_pts = [];
+                    for (let j = 0; j < feature_x.length; j++) {
+                        feature_pts.push([feature_x[j], feature_y[j]]);
+                    }
+
+                    // 简化后点集转wkt(可选择不包含起点和终点）
+                    var line_wkt = "LINESTRING(";
+                    // 包含起点和终点
+                    // for (let j = 0; j < feature_pts.length; j++) {
+                    //     line_wkt += feature_pts[j][0] + " " + feature_pts[j][1] + ",";
+                    // }
+                    // 不包含起点和终点
+                    if (feature_pts.length > 3) {
+                        for (let j = 1; j < feature_pts.length - 1; j++) {
+                            line_wkt += feature_pts[j][0] + " " + feature_pts[j][1] + ",";
+                        }
+                    } else {
+                        line_wkt += feature_pts[0][0] + " " + feature_pts[0][1] + ",";
+                        line_wkt += feature_pts[0][0] + " " + feature_pts[0][1] + ",";
+                    }
+                    line_wkt = line_wkt.substr(0, line_wkt.length - 1);
+                    line_wkt += ")";
+                    // 分隔符
+                    line_wkt += ",,,";
+                    line_wkts += line_wkt;
+
+                    // 显示简化后线段
+                    display_lines(feature_pts, map1, "#3366FF");
+
+                    // 特征点间距离
+                    var pts_distance = [0];
+                    var dist_sum = 0;
+                    var idx = 1;
+                    var x1, y1, x2, y2;
+                    for (let j = 1; j < cur_trace_pts.length; j++) {
+                        if (j !== feature_index[idx]) {
+                            [x1, y1, x2, y2] = [cur_trace_pts[j - 1].lng, cur_trace_pts[j - 1].lat, cur_trace_pts[j].lng, cur_trace_pts[j].lat];
+                            dist_sum += AMap.GeometryUtil.distance([x1, y1], [x2, y2]);
+                        } else {
+                            idx++;
+                            pts_distance.push(parseFloat(dist_sum.toFixed(2)));
+                            dist_sum = 0;
+                        }
+                    }
+
+                    // for (let j = 1; j < cur_trace_pts.length; j++) {
+                    //     [x1, y1, x2, y2] = [cur_trace_pts[j - 1].lng, cur_trace_pts[j - 1].lat, cur_trace_pts[j].lng, cur_trace_pts[j].lat];
+                    //     console.log(AMap.GeometryUtil.distance([x1, y1], [x2, y2]));
+                    // }
+
+
+                    all_feature_index += feature_index.toString() + ",,,";
+                    all_feature_pts += feature_pts.toString() + ",,,";
+                    all_pts_distance += pts_distance.toString() + ",,,";
+                    all_feature_pts1.push(feature_pts);
+                }
+                line_wkts = line_wkts.substr(0, line_wkts.length - 3);
+                all_feature_index = all_feature_index.substr(0, all_feature_index.length - 3);
+                all_feature_pts = all_feature_pts.substr(0, all_feature_pts.length - 3);
+                all_pts_distance = all_pts_distance.substr(0, all_pts_distance.length - 3);
+                console.log("all_feature_index", all_feature_index);
+                console.log("all_feature_pts", all_feature_pts);
+                console.log("all_pts_distance", all_pts_distance);
+
+                // var all_path_pts;
+                // all_path_pts = get_all_path_pts(all_feature_pts1);
+                // var massMarks = new AMap.MassMarks(null, {
+                //     zIndex: 5,
+                //     zooms: [3, 19],
+                //     style: {
+                //         url: "https://a.amap.com/jsapi_demos/static/images/mass2.png",
+                //         anchor: new AMap.Pixel(3, 3),
+                //         size: new AMap.Size(5, 5)
+                //     }
+                // });
+                //
+                // var data = [];
+                // for (let i = 0; i < all_path_pts.length; i++) {
+                //     data.push({
+                //         lnglat: [all_path_pts[i][0], all_path_pts[i][1]],
+                //         id: i + 1
+                //     });
+                // }
+                // massMarks.setData(data);
+                // massMarks.setMap(map1);
+
+                setTimeout(function () {
+                    var data = {
+                        "feature_index": all_feature_index,
+                        "feature_pts": all_feature_pts,
+                        "pts_distance": all_pts_distance,
+                        "line_wkts": line_wkts
+                    };
+                    $.ajax({
+                        type: "post",
+                        url: "http://localhost:3090/users/index2",
+                        dataType: "text",
+                        data: data,
+                        success: function (result) {
+                            console.log(111, result);
+                        },
+                        error: function (result) {
+                            console.log(222, result);
+                        }
+                    });
+                }, 100);
+
+                function dauglas_peucker(start_index, end_index, threshold_dist) {
+                    var path = [cur_trace_pts[start_index], cur_trace_pts[end_index]];
+                    var i;
+                    var dists = [];
+                    if (end_index - start_index > 1) {
+                        for (i = start_index; i <= end_index; i++) {
+                            dists.push([i, AMap.GeometryUtil.distanceToLine(cur_trace_pts[i], path)]);
+                        }
+                        dists = sort_list(dists, 1, true);
+                        var max_dist = dists[0][1];
+                        if (max_dist <= threshold_dist) {
+                            update_res(start_index);
+                            update_res(end_index);
+                        }
+                        if (max_dist > threshold_dist) {
+                            var divide_index = dists[0][0];
+                            dauglas_peucker(start_index, divide_index, threshold_dist);
+                            dauglas_peucker(divide_index, end_index, threshold_dist);
+                        }
+                    }
+                    if (end_index - start_index === 1) {
+                        update_res(start_index);
+                        update_res(end_index);
+                    }
+                }
+
+
+                function update_res(index) {
+                    if (!(feature_index.includes(index))) {
+                        feature_index.push(index);
+                    }
+                    if (!(feature_x.includes(cur_trace_pts[index].lng) && feature_y.includes(cur_trace_pts[index].lat) &&
+                        feature_x.lastIndexOf(cur_trace_pts[index].lng) === feature_y.lastIndexOf(cur_trace_pts[index].lat) &&
+                        feature_x.lastIndexOf(cur_trace_pts[index].lng) !== -1)) {
+                        feature_x.push(cur_trace_pts[index].lng);
+                        feature_y.push(cur_trace_pts[index].lat);
+                    }
+                }
+            }
+        });
+    };
+
+    function sort_list(list, sort_index, reverse) {
+        let tmp;
+        for (let i = 0; i < list.length - 1; i++) {
+            for (let j = 0; j < list.length - 1 - i; j++) {
+                if (!reverse) {
+                    if (list[j][sort_index] > list[j + 1][sort_index]) {
+                        tmp = list[j];
+                        list[j] = list[j + 1];
+                        list[j + 1] = tmp;
+                    }
+                }
+                if (reverse) {
+                    if (list[j][sort_index] < list[j + 1][sort_index]) {
+                        tmp = list[j];
+                        list[j] = list[j + 1];
+                        list[j + 1] = tmp;
+                    }
+                }
+            }
+        }
+        return list;
+    }
+
+    function get_all_path_pts(path_pts) {
+        var all_path_pts = [];
+        for (let i = 0; i < path_pts.length; i++) {
+            for (let j = 0; j < path_pts[i].length; j++) {
+                all_path_pts.push(path_pts[i][j]);
+            }
+        }
+        return all_path_pts;
+    }
+
+    function display_lines(pts, map, strokeColor) {
+        var polyline = new AMap.Polyline({
+            path: pts,
+            isOutline: true,
+            outlineColor: "#000000",
+            borderWeight: 1,
+            strokeColor: strokeColor,
+            strokeOpacity: 1,
+            strokeWeight: 2,
+            // 折线样式还支持 'dashed'
+            strokeStyle: "solid",
+            // strokeStyle是dashed时有效
+            strokeDasharray: [10, 5],
+            lineJoin: "round",
+            lineCap: "round",
+            zIndex: 50,
+        });
+
+        polyline.setMap(map);
+        // 缩放地图到合适的视野级别
+        map.setFitView([polyline]);
+    }
+
+</script>
+</body>
+</html>
+
